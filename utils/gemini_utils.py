@@ -32,6 +32,38 @@ dotenv.load_dotenv(dot_file)
 _genai_client = None
 _genai_client_lock = threading.Lock()
 
+# Opt-in, process-wide request budget. Set before running an agent.
+_api_request_lock = threading.Lock()
+_api_request_count = 0
+
+class APILimitReached(RuntimeError):
+    """Stop the run without retries when a local request budget is exhausted."""
+
+class GeminiQuotaExhausted(RuntimeError):
+    """Google rejected the request because the API quota was exhausted."""
+
+def _reserve_api_request():
+    global _api_request_count
+    raw = os.getenv("PAPER_ORCHESTRA_MAX_API_CALLS", "0")
+    try:
+        maximum = int(raw)
+    except ValueError as exc:
+        raise ValueError("PAPER_ORCHESTRA_MAX_API_CALLS must be an integer") from exc
+    if maximum < 0:
+        raise ValueError("PAPER_ORCHESTRA_MAX_API_CALLS must be nonnegative")
+    with _api_request_lock:
+        if maximum and _api_request_count >= maximum:
+            raise APILimitReached(f"Local Gemini request budget reached ({maximum}).")
+        _api_request_count += 1
+
+def _raise_for_terminal_api_error(exc):
+    code = getattr(exc, "code", None)
+    status = str(getattr(exc, "status", ""))
+    if code == 429 or "RESOURCE_EXHAUSTED" in status:
+        raise GeminiQuotaExhausted("Gemini quota exhausted (HTTP 429); stopping without retry.") from None
+    if code in (400, 401, 403, 404):
+        raise RuntimeError(f"Non-retryable Gemini API error: HTTP {code}.") from None
+
 
 def get_genai_client() -> genai.Client:
     """Returns a shared Gemini client, creating it on first use.
@@ -174,6 +206,7 @@ def call_gemini_with_contents(
     genai_client = get_genai_client()
     for attempt in range(max_retries):
         try:
+            _reserve_api_request()
             response = genai_client.models.generate_content(
                 model=model_name,
                 contents=contents,
@@ -196,10 +229,13 @@ def call_gemini_with_contents(
                 "parsed_response": parsed_response,
             }
 
+        except (APILimitReached, GeminiQuotaExhausted):
+            raise
         except Exception as e:
+            _raise_for_terminal_api_error(e)
             error_msg = str(e)
             print(
-                f"Warning: Gemini API call failed on attempt {attempt + 1} of {max_retries}. Error: {error_msg}",
+                f"Warning: Gemini call failed on attempt {attempt + 1}/{max_retries}: {type(e).__name__}",
             )
 
             if (
