@@ -121,9 +121,26 @@ class HybridLiteratureAgent:
             f"    -> Identified {len(search_tasks)} distinct search tasks."
         )
 
-        self._execute_tasks_in_parallel(
-            search_tasks, outline, unique_papers_registry, processed_tasks, cutoff_date
-        )
+        verified_path = os.getenv("PAPER_ORCHESTRA_VERIFIED_REFERENCES")
+        if verified_path:
+            with open(verified_path, encoding="utf-8") as source:
+                entries = json.load(source)
+            if not isinstance(entries, list) or not entries:
+                raise ValueError("Verified reference file must be a non-empty JSON list.")
+            for entry in entries:
+                if entry.get("verified") is not True:
+                    raise ValueError("Each offline reference must explicitly set verified=true.")
+                paper = PaperData(**{k: v for k, v in entry.items() if k != "verified"})
+                if paper.citation_key in unique_papers_registry:
+                    raise ValueError(f"Duplicate citation key: {paper.citation_key}")
+                unique_papers_registry[paper.citation_key] = paper
+            self._safe_print(f"Offline mode: loaded {len(entries)} user-verified references; no Google Search calls.")
+        else:
+            if os.getenv("PAPER_ORCHESTRA_REQUIRE_OFFLINE", "0") == "1":
+                raise ValueError("Set PAPER_ORCHESTRA_VERIFIED_REFERENCES to a JSON reference file.")
+            self._execute_tasks_in_parallel(
+                search_tasks, outline, unique_papers_registry, processed_tasks, cutoff_date
+            )
 
         self._safe_print(
             f"\n✨ Final Count: {len(unique_papers_registry)} unique enriched papers retrieved."
@@ -462,7 +479,7 @@ class HybridLiteratureAgent:
             """
 
         response_dict = call_gemini_with_contents(
-            model_name="gemini-3-flash-preview",
+            model_name=self.model_name,
             contents=[prompt],
             generation_configs={
                 "tools": [self.google_search_tool],
