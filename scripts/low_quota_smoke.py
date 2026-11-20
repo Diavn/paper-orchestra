@@ -7,7 +7,14 @@ calling any agent. The two agent stages are deliberately separate processes.
 import argparse
 import json
 import os
+import sys
 from pathlib import Path
+
+# Executing `python scripts/low_quota_smoke.py` normally puts scripts/ (not
+# the repository root) on sys.path. Resolve imports consistently.
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 
 def main():
