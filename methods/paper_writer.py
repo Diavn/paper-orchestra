@@ -55,7 +55,7 @@ def write_single_paper(
         shutil.copytree(old_figure_dir, new_figure_dir, dirs_exist_ok=True)
     figures_dir = new_figure_dir
 
-    max_n_tries = 3
+    max_n_tries = 1 if os.getenv('PAPER_ORCHESTRA_MAX_API_CALLS') or os.getenv('PAPER_ORCHESTRA_REQUIRE_OFFLINE') == '1' else 3
     cur_try = 0
     succeed = False
 
